@@ -127,7 +127,7 @@ class Patcher:
         self.store = store
         self.repo_root = Path(repo_root)
         self.export_path = (Path(export_path) if export_path
-                           else self.repo_root / "codegraph" / "graph.json")
+                           else self.repo_root / ".codegraph" / "graph.json")
         self._exporter = Exporter(store, self.export_path)
         self._lock = threading.Lock()
 

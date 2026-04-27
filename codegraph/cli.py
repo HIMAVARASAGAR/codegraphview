@@ -33,7 +33,7 @@ def _find_repo_root(start: Path | None = None) -> Path:
 
 def _codegraph_dir(repo_root: Path) -> Path:
     """Get the codegraph data directory."""
-    return repo_root / "codegraph"
+    return repo_root / ".codegraph"
 
 
 def _get_store(repo_root: Path):
@@ -130,8 +130,18 @@ def init(path: str):
                 "node_modules/\n__pycache__/\n.git/\n.venv/\nvenv/\n"
                 "dist/\nbuild/\n*.min.js\n*.bundle.js\n*.pyc\n*.pyo\n"
                 "target/\nvendor/\n.gradle/\n*.class\ncoverage/\n"
-                ".coverage\nhtmlcov/\n"
+                ".coverage\nhtmlcov/\n.codegraph/\n"
             )
+
+    # Add .codegraph/ to .gitignore
+    gitignore_file = repo_root / ".gitignore"
+    if gitignore_file.exists():
+        content = gitignore_file.read_text()
+        if ".codegraph" not in content and ".codegraph/" not in content:
+            with gitignore_file.open("a") as f:
+                f.write("\n# CodeGraph\n.codegraph/\n")
+    else:
+        gitignore_file.write_text("# CodeGraph\n.codegraph/\n")
 
     # Initialize database
     store = _get_store(repo_root)

@@ -16,3 +16,4 @@ vendor/           # Go
 coverage/
 .coverage
 htmlcov/
+.codegraph/

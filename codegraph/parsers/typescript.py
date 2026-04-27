@@ -9,20 +9,33 @@ from tree_sitter import Language, Parser as TSParser, Node
 from codegraph.parsers.base import Parser, NodeEvent, EdgeEvent, make_node_id
 
 TS_LANGUAGE = Language(tsts.language_typescript())
+TSX_LANGUAGE = Language(tsts.language_tsx())
 
 
 class TypeScriptParser(Parser):
-    """Tree-sitter based parser for TypeScript source code."""
+    """Tree-sitter based parser for TypeScript source code.
+
+    Uses language_typescript() for .ts files and language_tsx() for .tsx files,
+    ensuring proper JSX parsing in React TypeScript projects.
+    """
 
     language = "typescript"
     extensions = [".ts", ".tsx"]
 
     def __init__(self) -> None:
-        self._ts = TSParser(TS_LANGUAGE)
+        self._ts_parser = TSParser(TS_LANGUAGE)
+        self._tsx_parser = TSParser(TSX_LANGUAGE)
+
+    def _parser_for(self, file_path: str) -> TSParser:
+        """Select the correct parser based on file extension."""
+        if file_path.endswith(".tsx"):
+            return self._tsx_parser
+        return self._ts_parser
 
     def parse(self, file_path: str, content: str) -> tuple[list[NodeEvent], list[EdgeEvent]]:
         """Parse TypeScript source into IR events."""
-        tree = self._ts.parse(content.encode("utf-8"))
+        parser = self._parser_for(file_path)
+        tree = parser.parse(content.encode("utf-8"))
         nodes: list[NodeEvent] = []
         edges: list[EdgeEvent] = []
 
@@ -51,6 +64,12 @@ class TypeScriptParser(Parser):
             self._handle_var_decl(node, fp, fid, pid, nodes, edges)
         elif t == "call_expression":
             self._handle_call(node, fp, pid or fid, edges)
+        elif t in ("jsx_self_closing_element", "jsx_opening_element"):
+            self._handle_jsx_tag(node, fp, pid or fid, edges)
+        elif t == "jsx_element":
+            # Process the opening tag for CALLS, then recurse into children
+            self._handle_jsx_element(node, fp, fid, pid, nodes, edges)
+            return  # _handle_jsx_element already recurses
         elif t == "export_statement":
             for c in node.children:
                 self._walk(c, fp, fid, pid, nodes, edges)
@@ -161,6 +180,10 @@ class TypeScriptParser(Parser):
                         fnid = make_node_id(fp, vname, "FUNCTION")
                         edges.append(EdgeEvent(kind="DEFINES", from_id=pid or fid,
                                              to_id=fnid, line=line))
+                        body = val.child_by_field_name("body")
+                        if body:
+                            for cc in body.children:
+                                self._walk(cc, fp, fid, fnid, nodes, edges)
                     else:
                         nodes.append(NodeEvent(
                             kind="VARIABLE", name=vname, file_path=fp,
@@ -182,3 +205,54 @@ class TypeScriptParser(Parser):
             to_id=make_node_id(fp, callee, "FUNCTION"),
             line=line, confidence=1.0 if "." not in callee else 0.7,
         ))
+
+    # ── JSX support ───────────────────────────────────────────────────
+
+    def _handle_jsx_tag(self, node: Node, fp: str, caller_id: str, edges: list[EdgeEvent]) -> None:
+        """Extract a CALLS edge from a JSX tag to the component it references.
+
+        <ComponentName /> or <ComponentName> is semantically a call to
+        ComponentName(). Only PascalCase identifiers are treated as components;
+        lowercase tags (div, span, …) are native HTML and ignored.
+        """
+        tag_name, is_member = self._jsx_tag_name(node)
+        if tag_name is None:
+            return
+        # Member expressions are always components; plain identifiers must be PascalCase
+        if is_member or tag_name[0].isupper():
+            line = node.start_point[0] + 1
+            edges.append(EdgeEvent(
+                kind="CALLS", from_id=caller_id,
+                to_id=make_node_id(fp, tag_name, "FUNCTION"),
+                line=line, confidence=0.9,
+            ))
+
+    def _handle_jsx_element(self, node: Node, fp: str, fid: str, pid: Optional[str],
+                            nodes: list[NodeEvent], edges: list[EdgeEvent]) -> None:
+        """Walk a jsx_element: process its opening tag, then recurse children."""
+        for child in node.children:
+            if child.type == "jsx_opening_element":
+                self._handle_jsx_tag(child, fp, pid or fid, edges)
+            elif child.type == "jsx_self_closing_element":
+                self._handle_jsx_tag(child, fp, pid or fid, edges)
+            elif child.type == "jsx_expression":
+                # JSX expressions like {items.map(x => <Item />)}
+                for c in child.children:
+                    self._walk(c, fp, fid, pid, nodes, edges)
+            else:
+                self._walk(child, fp, fid, pid, nodes, edges)
+
+    @staticmethod
+    def _jsx_tag_name(node: Node) -> Optional[tuple[str, bool]]:
+        """Extract the tag name from a jsx_opening_element or jsx_self_closing_element.
+
+        Returns:
+            A tuple of (tag_name, is_member_expression), or None if no name found.
+            Handles plain identifiers (<Header />) and member expressions (<ui.Button />).
+        """
+        for child in node.children:
+            if child.type == "identifier":
+                return (child.text.decode("utf-8"), False)
+            if child.type == "member_expression":
+                return (child.text.decode("utf-8"), True)
+        return None
