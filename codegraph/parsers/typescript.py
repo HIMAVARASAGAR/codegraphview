@@ -215,9 +215,10 @@ class TypeScriptParser(Parser):
         ComponentName(). Only PascalCase identifiers are treated as components;
         lowercase tags (div, span, …) are native HTML and ignored.
         """
-        tag_name, is_member = self._jsx_tag_name(node)
-        if tag_name is None:
+        res = self._jsx_tag_name(node)
+        if res is None:
             return
+        tag_name, is_member = res
         # Member expressions are always components; plain identifiers must be PascalCase
         if is_member or tag_name[0].isupper():
             line = node.start_point[0] + 1

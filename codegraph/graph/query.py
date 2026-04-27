@@ -150,11 +150,13 @@ class QueryEngine:
             List of potentially dead code node dicts.
         """
         if exclude_kinds is None:
-            exclude_kinds = ["FILE", "MODULE", "IMPORT"]
+            exclude_kinds = []
 
         all_nodes = self.store.get_all_nodes()
         result = []
         for node in all_nodes:
+            if node["kind"] not in ("FUNCTION", "CLASS"):
+                continue
             if node["kind"] in exclude_kinds:
                 continue
             incoming = self.store.get_edges_to(node["id"])
